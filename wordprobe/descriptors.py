@@ -1,5 +1,6 @@
 """Descriptor helpers for slot-backed storage in lightweight container types."""
 
+
 class SlotDescriptor:
     """Base descriptor that stores values in a private slot."""
 
@@ -18,6 +19,7 @@ class SlotDescriptor:
 
 
 class SlottedDataDescriptor(SlotDescriptor):
+
     def __set__(self, instance, value):
         setattr(instance, self.storage_name, value)
 

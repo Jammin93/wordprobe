@@ -104,11 +104,15 @@ class AbstractSimulator(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def choose_answer(self):
+    def set_answers(self, answers: Sequence[str]) -> Self:
         raise NotImplementedError
 
     @abstractmethod
-    def run_game(self):
+    def choose_answer(self) -> str:
+        raise NotImplementedError
+
+    @abstractmethod
+    def run_game(self) -> Any:
         raise NotImplementedError
 
     @abstractmethod

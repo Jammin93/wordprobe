@@ -107,12 +107,8 @@ class SearchPool:
 
     @contextmanager
     def heterograms(self) -> Iterator[SearchPool]:
-        """Temporarily restrict the search space to heterograms."""
-        mask = [
-            len(word) == len(set(word))
-            for word in self._active_words()
-        ]
-        with self.mask(mask):
+        """Temporarily restrict active words to heterograms."""
+        with self.matching(lambda word: len(word) == len(set(word))):
             yield self
 
     def pattern_count(self, pattern: re.Pattern[str]) -> int:
