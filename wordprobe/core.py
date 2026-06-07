@@ -51,7 +51,7 @@ class GameEngineBase:
         return self
 
 
-class GameEngine(GameEngineBase, BaseInteractiveEngine):
+class GameEngine(GameEngineBase, AbstractInteractiveEngine):
 
     @increment_turn
     def submit_guess(self, guess: str, feedback: str) -> GameEngine:
@@ -60,7 +60,7 @@ class GameEngine(GameEngineBase, BaseInteractiveEngine):
         return self
 
 
-class SimulatorEngine(GameEngineBase, BaseSimulatorEngine):
+class SimulatorEngine(GameEngineBase, AbstractSimulatorEngine):
 
     def __init__(self, model: WordModel[str]):
         super().__init__(model)
