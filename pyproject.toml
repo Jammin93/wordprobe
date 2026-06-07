@@ -3,19 +3,19 @@ requires = ["pip", "setuptools", "setuptools-scm"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "wordler"
+name = "wordprobe"
 authors = [{name = "Ben Ohling", email = "b.ohling@outlook.com"}]
 license = {file = "LICENSE"}
-description = "An optimized Wordle solver API."
+description = "An optimized Wordle solver API for testing simulators and solvers against Wordle's answer list."
 requires-python = ">=3.12.3"
 dynamic = ["version", "readme", "dependencies", "optional-dependencies"]
-keywords = ["wordle", "wordler", "simulator", "simulate", "solver", "entropy", "probability"]
+keywords = ["wordle", "wordler", "simulator", "simulate", "solver", "entropy", "probability", "wordprobe"]
 
 [project.urls]
-Repository = "https://github.com/Jammin93/wordler.git"
+Repository = "https://github.com/Jammin93/wordprobe.git"
 
 [tool.setuptools]
-packages = ["wordler"]
+packages = ["wordprobe"]
 include-package-data = true
 
 [tool.setuptools.package-data]
@@ -23,7 +23,7 @@ include = ["data/db/*", "data/http/"]
 exclude = ["data/http/cache.sqlite"]
 
 [tool.setuptools.dynamic]
-version = {attr = "wordler.__init__.__version__"}
+version = {attr = "wordprobe.__init__.__version__"}
 readme = {file = ["README.md"], content-type = "text/markdown"}
 dependencies = {file = "requirements.txt"}
 optional-dependencies.dev = {file = "requirements-dev.txt"}
