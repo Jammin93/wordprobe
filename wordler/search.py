@@ -5,13 +5,14 @@ from __future__ import annotations
 import re
 
 from contextlib import contextmanager
-from itertools import islice
-from functools import partial, wraps
-from typing import Callable, Iterator, Sequence
+from typing import Callable, Iterator, overload, Sequence
 
 from .descriptors import SlottedDataDescriptor
 
-ScoreKey = Callable[[str], float]
+__all__ = ("SearchSpace", )
+
+SortKey = Callable[[str], float]
+MaskLike = Sequence[bool] | Callable[[str], bool]
 
 
 class WordListMask(SlottedDataDescriptor):
@@ -24,151 +25,107 @@ class WordListMask(SlottedDataDescriptor):
     """
 
     def __set__(self, instance, value: Sequence[bool]):
-        if len(value) != len(instance._pool):
+        if len(value) != len(instance._words):
             raise ValueError(
-                f"mask length mismatch: {len(value)} != {len(instance._pool)}"
+                f"mask length mismatch: {len(value)} != {len(instance._words)}"
             )
 
         super().__set__(instance, list(value))
 
 
-def check_for_empty_pool(method: Callable) -> Callable:
-    """
-    Decorator that prevents operations on an empty active search space.
-
-    Raises RuntimeError before calling the wrapped method when no active words
-    remain.
-    """
-
-    @wraps(method)
-    def wrapper(self, *args, **kwargs):
-        if self.empty():
-            raise RuntimeError("search space is empty")
-
-        return method(self, *args, **kwargs)
-    return wrapper
-
-
-# noinspection PyUnresolvedReferences
-class SearchSpace:
-    """
-    Mutable active-word pool.
-
-    Tracks the full word pool, an active/inactive mask, and submitted guesses.
-    Filtering operations mutate the active mask while preserving the original
-    pool, allowing the search space to be reset or temporarily remasked.
-    """
+class SearchPool:
     __slots__ = (
-        "_pool",
+        "_words",
         "_index",
         "_mask__slot",
-        "_guesses",
     )
     _mask = WordListMask()
 
     def __init__(self, words: Sequence[str]):
-        """
-        Initialize the search space from a sequence of words.
-
-        Duplicate words are removed. All remaining words start as active
-        candidates, and no guesses are recorded.
-        """
-        self._pool = tuple(set(words))
-        self._index: dict[str, int] = {
-            word: idx for idx, word in enumerate(self._pool)
-        }
-        self._mask = [True] * len(self._pool)
-        self._guesses = []
-
-    @property
-    def guesses(self):
-        """List of all guesses that have been submitted."""
-        return list(self._guesses)
+        self._words = words
+        self._index = {word: idx for idx, word in enumerate(words)}
+        self._mask = [True] * len(words)
 
     @property
     def eliminated(self) -> list[str]:
         """The list of eliminated words."""
         return [
-            word for word, active in zip(self._pool, self._mask)
+            word for word, active in self._word_mask_pairs()
             if not active
         ]
 
-    @check_for_empty_pool
-    def best_guess(self, key: ScoreKey) -> str:
-        """
-        Return the highest-scoring active word.
-        Does not mutate the search space.
-        """
-        return max(self, key=key)
-
-    def ranked_by(self, key: ScoreKey, **kwargs) -> Iterator[str]:
-        """
-        Return ranked active words without mutating the search space. It may
-        be useful to submit a partials function.
-        """
-        key = partial(key, **kwargs)
-        yield from sorted(self, key=key, reverse=True)
-
-    def top_n_candidates(
-            self,
-            n: int,
-            key: ScoreKey,
-            **kwargs,
-            ) -> Iterator[str]:
-        """Iterator which produces the top `n` number of candidates."""
-        yield from islice(self.ranked_by(key, **kwargs), n)
-
-    def submit_guess(self, guess: str):
-        """Push a guess onto the the list of tracked guesses."""
-        if guess not in self._index:
-            raise ValueError(f"invalid guess: {guess!r}")
-
-        self._guesses.append(guess)
-
-        idx = self._index[guess]
-        self._mask[idx] = False
-        return self
-
     @contextmanager
-    def mask(self, mask: Sequence[bool] | None) -> Iterator[SearchSpace]:
-        """
-        Temporarily replace the active mask.
-
-        If mask is None, all answers are temporarily active.
-        """
+    def mask(self, mask: MaskLike) -> Iterator[bool]:
+        """Temporarily replace the active mask."""
         saved = self._mask.copy()
         try:
-            if mask is None:
-                self._mask = [True] * len(self._pool)
+            if callable(mask):
+                self._mask = [
+                    active and mask(word)
+                    for word, active in self._word_mask_pairs()
+                ]
             else:
-                self.where(mask)
+                self._mask = [
+                    active and selected
+                    for active, selected in zip(self._mask, mask)
+                ]
 
             yield self
         finally:
             self._mask = saved
 
     @contextmanager
-    def heterograms(self) -> Iterator[SearchSpace]:
-        """Temporarily restrict the search space to heterograms."""
+    def matching(
+            self,
+            *conditions: Callable[[str], bool],
+            ) -> Iterator[SearchPool]:
+        """
+        Temporarily restrict active words to those matching all predicates.
+        """
         mask = [
-            active and len(word) == len(set(word))
-            for word, active in zip(self._pool, self._mask)
+            active and all(predicate(word) for predicate in conditions)
+            for word, active in self._word_mask_pairs()
         ]
         with self.mask(mask):
             yield self
 
-    def where(self, mask: list[bool]) -> SearchSpace:
+    @contextmanager
+    def excluding(
+            self,
+            *conditions: Callable[[str], bool],
+            ) -> Iterator[SearchPool]:
         """
-        Replace the active mask.
-
-        The supplied mask must align one-to-one with the original word pool.
-        Active words are represented by True values, eliminated words by False
-        values.
+        Temporarily restrict active words to those not matching any of
+        the predicates.
         """
-        self._mask = mask
-        return self
+        mask = [
+            active and not any(predicate(word) for predicate in conditions)
+            for word, active in self._word_mask_pairs()
+        ]
+        with self.mask(mask):
+            yield self
 
-    def keep_where(self, predicate: Callable[[str], bool]) -> SearchSpace:
+    @contextmanager
+    def heterograms(self) -> Iterator[SearchPool]:
+        """Temporarily restrict the search space to heterograms."""
+        mask = [
+            len(word) == len(set(word))
+            for word in self._active_words()
+        ]
+        with self.mask(mask):
+            yield self
+
+    def pattern_count(self, pattern: re.Pattern[str]) -> int:
+        """Count active words that match the compiled regex pattern."""
+        return len([x for x in self if pattern.match(x)])
+
+    def pattern_rate(self, pattern: re.Pattern[str]) -> int:
+        """
+        Return the active fraction of words that match the compiled pattern.
+        """
+        return self.pattern_count(pattern) / len(self)
+
+    def _keep_where(self, predicate: Callable[[str], bool]) -> SearchPool:
         """
         Keep currently active words that satisfy a predicate.
 
@@ -178,40 +135,51 @@ class SearchSpace:
         """
         self._mask = [
             active and predicate(word)
-            for word, active in zip(self._pool, self._mask)
+            for word, active in self._word_mask_pairs()
         ]
         return self
 
-    def pattern_count(self, pattern: re.Pattern[str]) -> int:
-        """
-        Count active words that fully match a compiled regex pattern.
-        """
-        return len([x for x in self if pattern.fullmatch(x)])
-
-    def pattern_percentage(self, pattern: re.Pattern[str]) -> float:
-        """
-        Return the fraction of active words that fully match a pattern.
-        """
-        return self.pattern_count(pattern) / len(self)
-
-    def reset(self) -> SearchSpace:
-        """
-        Restore all words to active status and clear submitted guesses.
-        """
-        self._clear_mask()
-        self._guesses.clear()
-        return self
-
     def empty(self) -> bool:
-        """Return True if no active words remain."""
+        """Indicates whether the search space is empty."""
         return len(self) == 0
 
-    def _clear_mask(self) -> None:
-        """Reactivate every word in the original pool."""
-        self._mask = [True] * len(self._pool)
+    def _eliminate(self, word: str) -> SearchPool:
+        """Remove a word from the pool's visible set."""
+        if word not in self:
+            raise ValueError(f"invalid word: {word!r}")
 
-    def __len__(self):
+        idx = self._index[word]
+        self._mask[idx] = False
+        return self
+
+    def _clear_mask(self) -> SearchPool:
+        """Remove all active words from the search space."""
+        self._mask = [True] * len(self._words)
+        return self
+
+    def _reset(self) -> SearchPool:
+        """Restore all words to active status."""
+        self._clear_mask()
+        return self
+
+    def _word_mask_pairs(self):
+        yield from zip(self._words, self._mask)
+
+    def _active_words(self):
+        yield from (
+            word for word, active in self._word_mask_pairs() if active
+        )
+
+    def _inactive_words(self):
+        yield from (
+            word for word, active in self._word_mask_pairs() if not active
+        )
+
+    def __len__(self) -> int:
         return sum(self._mask)
+
+    def __iter__(self):
+        yield from self._active_words()
 
     def __contains__(self, word: str):
         idx = self._index.get(word)
@@ -220,7 +188,50 @@ class SearchSpace:
 
         return self._mask[idx]
 
-    def __iter__(self):
-        for word, active in zip(self._pool, self._mask):
-            if active:
-                yield word
+    @overload
+    def __getitem__(self, index: int) -> str:
+        ...
+
+    @overload
+    def __getitem__(self, index: slice) -> SearchPool:
+        ...
+
+    def __getitem__(self, index: int | slice) -> str | SearchPool:
+        active = self._active_words()
+        if isinstance(index, slice):
+            return SearchPool(list(active)[index])
+        return list(active)[index]
+
+    def __str__(self) -> str:
+        return list(self).__str__()
+
+
+class SearchSpace(SearchPool):
+    __slots__ = ("_pool", "_guesses")
+
+    def __init__(self, words: Sequence[str]):
+        # Remove duplicates but preserve order.
+        words = tuple(dict.fromkeys(words))
+        super().__init__(words)
+        self._pool = SearchPool(self._words)
+
+    @property
+    def pool(self) -> SearchPool:
+        """
+        The underlying search pool of playable candidates, whose mask only
+        tracks eliminated guesses.
+        """
+        return self._pool
+
+    def _eliminate(self, word: str) -> SearchSpace:
+        super()._eliminate(word)
+        self._pool._eliminate(word)
+        return self
+
+    def reset(self) -> SearchSpace:
+        """
+        Restore all words to active status and clear submitted guesses.
+        """
+        self._reset()
+        self._pool._reset()
+        return self

@@ -9,25 +9,24 @@ from typing import Sequence, Iterator
 from .constraints import TokenConstraints, WORD_SIZE
 from .search import SearchSpace
 
+__all__ = ("WordModel", )
 
-class WordModel:
+
+class WordModel(SearchSpace):
     """
     Combined word-solving model which is both token-constraint and
     search-space aware.
 
-    sp: SearchSpace owns:
-        - word pool
-        - active mask
-        - guesses
-        - ranking helpers
-
-    tcs: TokenConstraints owns:
+    constraints: TokenConstraints owns:
         - fixed positions
         - banned positions
         - min token counts
         - max token counts
 
     WordModel owns:
+        - word pool
+        - active mask
+        - guesses
         - applying feedback to both systems
         - rate mapping over the current active search space
 
@@ -37,19 +36,19 @@ class WordModel:
     effectively a base class for the game engine class. We expose underlying
     methods on the game engine; not the integration layer.
     """
-    __slots__ = ("search_space", "constraints")
+    __slots__ = ("constraints", )
 
     def __init__(self, words: Sequence[str]):
-        self.search_space = SearchSpace(words)
-        self.constraints = TokenConstraints()
+        super().__init__(words)
+        self.constraints: TokenConstraints = TokenConstraints()
 
     def update(self, guess: str, token_mask: str) -> WordModel:
         """
         Apply an externally-provided token_mask string and guess to the model.
         """
-        self.search_space.submit_guess(guess)
+        self._eliminate(guess)
         self.constraints.update(guess, token_mask)
-        self.search_space.keep_where(self.constraints.is_candidate)
+        self._keep_where(self.constraints.is_candidate)
         return self
 
     def reset(self) -> WordModel:
@@ -57,7 +56,7 @@ class WordModel:
         Reset the model by resetting both its search space and corresponding
         constraints.
         """
-        self.search_space.reset()
+        super().reset()
         self.constraints.reset()
         return self
 
@@ -68,13 +67,13 @@ class WordModel:
         Each rate represents the number of times a token is seen across the
         entire search space. It does not count duplicate word tokens.
         """
-        total = len(self.search_space)
+        total = len(self)
         if total == 0:
             return
 
         tokens = string.ascii_lowercase
         counter = {t: 0 for t in tokens}
-        for word in self.search_space:
+        for word in self:
             for token in set(word):
                 counter[token] += 1
 
@@ -88,13 +87,13 @@ class WordModel:
         index in a word, across the entire search space. It does not ignore
         duplicate word tokens.
         """
-        total = len(self.search_space)
+        total = len(self)
         if total == 0:
             return
 
         tokens = string.ascii_lowercase
         counter = {t: [0] * WORD_SIZE for t in tokens}
-        for word in self.search_space:
+        for word in self:
             for idx, token in enumerate(word):
                 counter[token][idx] += 1
 

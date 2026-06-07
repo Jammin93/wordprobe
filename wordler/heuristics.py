@@ -4,6 +4,8 @@ from math import log2
 
 from .constraints import WORD_SIZE
 
+__all__ = ("bin_entropy", )
+
 
 def bin_entropy(p: float) -> float:
     """Return the binary entropy of probability `p`"""

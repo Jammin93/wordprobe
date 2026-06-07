@@ -58,8 +58,10 @@ def get_games_since(date: datetime) -> list[dict[str, Any]]:
     from .sessions import CachedLimiterSession
 
     cwd = pathlib.Path(CWD).parent
+    cache_dir = cwd / "data" / "http"
+    cache_dir.mkdir(parents=True, exist_ok=True)
     session = CachedLimiterSession(
-        cache_name=cwd / "data" / "http" / "cache",
+        cache_name=cache_dic / "cache",
         urls_expire_after={API_URL + "/*": timedelta(days=1)},
         allowable_methods=["GET"],
         allowable_codes=[200],

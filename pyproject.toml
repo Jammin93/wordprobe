@@ -4,19 +4,26 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "wordler"
-authors = [{name = "Ben Ohling"}]
+authors = [{name = "Ben Ohling", email = "b.ohling@outlook.com"}]
 license = {file = "LICENSE"}
 description = "An optimized Wordle solver API."
 requires-python = ">=3.12.3"
-dynamic = ["version", "readme"]
+dynamic = ["version", "readme", "dependencies", "optional-dependencies"]
+keywords = ["wordle", "wordler", "simulator", "simulate", "solver", "entropy", "probability"]
 
-[project.optional-dependencies]
-dev = ["pytest"]
+[project.urls]
+Repository = "https://github.com/Jammin93/wordler.git"
 
 [tool.setuptools]
 packages = ["wordler"]
-include-package-data = false
+include-package-data = true
+
+[tool.setuptools.package-data]
+include = ["data/db/*", "data/http/"]
+exclude = ["data/http/cache.sqlite"]
 
 [tool.setuptools.dynamic]
 version = {attr = "wordler.__init__.__version__"}
 readme = {file = ["README.md"], content-type = "text/markdown"}
+dependencies = {file = "requirements.txt"}
+optional-dependencies.dev = {file = "requirements-dev.txt"}

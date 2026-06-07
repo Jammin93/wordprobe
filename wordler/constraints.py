@@ -6,6 +6,12 @@ from collections import Counter, defaultdict, UserList
 from enum import StrEnum
 from typing import Sequence
 
+__all__ = (
+    "parse_token_flags",
+    "TokenConstraints",
+    "WORD_SIZE",
+)
+
 WORD_SIZE = 5
 
 
@@ -18,14 +24,14 @@ class TokenFlag(StrEnum):
 class FixedTokenArray(UserList[str | None]):
 
     def __init__(self, values: Sequence[str | None] | None = None):
+        if values is None:
+            values = [None] * WORD_SIZE
+
         if len(values) != WORD_SIZE:
             raise ValueError(
                 f"fixed token array must be of length {WORD_SIZE}; "
                 f"got {values}"
             )
-
-        if values is None:
-            values = [None] * WORD_SIZE
 
         super().__init__(values)
 
@@ -103,7 +109,7 @@ class TokenConstraints:
         }
 
     @property
-    def globally_invalid(self) -> set[str]:
+    def invalid(self) -> set[str]:
         """
         Returns a set of tokens that are globally invalid (i.e. regardless of
         position).
@@ -125,11 +131,13 @@ class TokenConstraints:
 
     @property
     def floating(self) -> set[str]:
-        """
-        Returns the set of tokens that are known to exist in the word but
-        whose token positions have not been confirmed.
-        """
-        return set(self._min_counts) - self._fixed._tokens
+        fixed_counts = Counter(
+            token for token in self._fixed if token is not None
+        )
+        return {
+            token for token, min_count in self._min_counts.items()
+            if min_count > fixed_counts[token]
+        }
 
     @property
     def known(self) -> set[str]:
@@ -139,6 +147,11 @@ class TokenConstraints:
         """
         return self._fixed._tokens | self.floating
 
+    @property
+    def free_indices(self) -> set[int]:
+        """Returns the set of indices that are not yet confirmed."""
+        return set(range(WORD_SIZE)) - self._fixed.indices
+
     def is_candidate(self, word: str) -> bool:
         """
         Indicates that the word is a valid candidate, given the constraints.
@@ -146,12 +159,18 @@ class TokenConstraints:
         if len(word) != WORD_SIZE:
             return False
 
-        return all((
-            self.satisfies_fixed_positions(word),
-            self.satisfies_banned_positions(word),
-            self.satisfies_min_counts(word),
-            self.satisfies_max_counts(word),
+        # Better to `any` over `all` here, because we want to short-circuit.
+        # Likewise, `has_invalid_tokens` is a cheap check, so we run that first.
+        return not any((
+            self.has_invalid_tokens(word),
+            not self.satisfies_banned_positions(word),
+            not self.satisfies_fixed_positions(word),
+            not self.satisfies_min_counts(word),
+            not self.satisfies_max_counts(word),
         ))
+
+    def has_invalid_tokens(self, word: str) -> bool:
+        return bool(self.invalid.intersection(word))
 
     def satisfies_fixed_positions(self, word: str) -> bool:
         """
