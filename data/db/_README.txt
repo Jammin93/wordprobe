@@ -1,0 +1,1 @@
+All wordle answers come from this link: https://gist.github.com/cfreshman/a03ef2cba789d8cf00c08f767e0fad7b

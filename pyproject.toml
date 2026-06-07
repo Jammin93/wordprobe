@@ -1,0 +1,22 @@
+[build-system]
+requires = ["pip", "setuptools", "setuptools-scm"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "wordler"
+authors = [{name = "Ben Ohling"}]
+license = {file = "LICENSE"}
+description = "An optimized Wordle solver API."
+requires-python = ">=3.12.3"
+dynamic = ["version", "readme"]
+
+[project.optional-dependencies]
+dev = ["pytest"]
+
+[tool.setuptools]
+packages = ["wordler"]
+include-package-data = false
+
+[tool.setuptools.dynamic]
+version = {attr = "wordler.__init__.__version__"}
+readme = {file = ["README.md"], content-type = "text/markdown"}

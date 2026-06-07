@@ -1,0 +1,31 @@
+# Bytecode
+__pycache__
+*/*.pyc
+
+# Distribution / Packaging
+build/
+dist/
+*.egg-info/
+
+# Pytest
+.pytest_cache/
+
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Development Environment
+.idea/
+.venv/
+
+# Local reference checkouts
+.agents
+tmp/
+.codex/
+*/*.bak
+data/http/cache.sqlite
+tester.py
+
+# PEP 582
+__pypackages__/
