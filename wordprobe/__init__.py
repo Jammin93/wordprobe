@@ -6,7 +6,7 @@ from .db import *
 from .heuristics import *
 from .models import *
 
-__version__ = "0.2.0"
+__version__ = "0.2.1"
 __author__ = "Ben Ohling"
 __copyright__ = f"© 2026 {__author__}"
 __all__ = ()
