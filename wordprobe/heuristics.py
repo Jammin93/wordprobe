@@ -1,3 +1,4 @@
+"""Convert probabilities to binary entropy values."""
 import numpy as np
 
 from functools import wraps
@@ -6,7 +7,20 @@ from .constants import ALPHABET_SIZE, TOKEN_OFFSET, WORDSIZE
 from .transforms import tokenize
 
 
-def _bin_entropy_array(p):
+def _bin_entropy_array(probabilities):
+    """
+    Convert an array of probabilies p to an array of binary entropy values.
+
+    Formula:
+        E(p) = (-p * log2(p) + (1 - p) * log2(1 - p))
+        
+    Boundary Behavior:
+        p = 0 -> 0
+        p = 1 -> 0
+        
+        A probability of 0 or 1 has no uncertainty and is therefore not a good
+        candidate for entropy.
+    """
     p = np.asarray(p, dtype=float)
     out = np.zeros_like(p)
     mask = (p > 0) & (p < 1)
@@ -16,7 +30,16 @@ def _bin_entropy_array(p):
     return out
 
 
-def _coerce(candidates, pool):
+def _coerce(candidates, pool=None):
+    """
+    Convert publically submitted sequences into token matrices.    
+    
+    Behavior:
+        If pool is none, the candidates become the pool.
+
+    This function is the represents the matrix boundary. Public scorers call it
+    once and then operate on the returned matrices.
+    """
     candidates = tokenize(candidates)
     if pool is None:
         pool = candidates
@@ -27,6 +50,19 @@ def _coerce(candidates, pool):
 
 
 def _token_presence(token_matrix):
+    """
+    Return a token presence matrix where presence [row, token] is true if it
+    appears anywhere in that word. Duplicate tokens in a single word only count
+    once. Used for global token rates and token-level scoring.
+
+    Example:
+        word tokens:    
+                        [ e, e, r, i, e ]
+        matrix:         
+                        [ e, True ]
+                        [ r, True ]
+                        [ i, True ]
+    """
     presence = np.zeros((token_matrix.shape[0], ALPHABET_SIZE), dtype=bool)
     rows = np.arange(token_matrix.shape[0])[:, None]
     presence[rows, token_matrix] = True
@@ -34,6 +70,25 @@ def _token_presence(token_matrix):
 
 
 def _token_rates(token_matrix):
+    """
+    Compute global token occurrence rates from a candidate matrix. A token
+    accounts, at most, once per word.
+
+    Example:
+        candidates:
+            light -> { l, i, g, h, t }
+            right -> { r, i, g, h, t }
+            night -> { n, i, g, h, t }
+
+        rates:
+            i -> 3 / 3 = 1.00
+            g -> 3 / 3 = 1.00
+            h -> 3 / 3 = 1.00
+            t -> 3 / 3 = 1.00
+            l -> 1 / 3 = 0.33
+            r -> 1 / 3 = 0.33
+            n -> 1 / 3 = 0.33
+    """
     return _token_presence(token_matrix).mean(axis=0)
 
 
