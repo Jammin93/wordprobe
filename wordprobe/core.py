@@ -4,6 +4,17 @@ import random
 from collections import Counter, defaultdict
 
 from .constants import WORDSIZE
+from .heuristics import (
+    token_probability_scores,
+    token_entropy_scores,
+    token_index_probability_scores,
+    token_index_entropy_scores,
+    composite_probability_scores,
+    composite_entropy_scores,
+    rank,
+    best_candidate,
+    top_candidates,
+)
 
 
 def compose_token_mask(guess, answer):
@@ -349,3 +360,10 @@ class Simulator(GameEngine):
         super().reset()
         self._answer = self.choose_answer()
         return self
+
+
+class Solver(GameEngine):
+
+    def __init__(self, words):
+        super().__init__(words)
+
