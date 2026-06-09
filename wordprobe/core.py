@@ -1,7 +1,9 @@
 import string
 import random
 
-from collections import Counter, defaultdict
+import numpy as np
+
+from collections import Counter, defaultdict, deque
 
 from .constants import WORDSIZE
 from .heuristics import (
@@ -99,7 +101,7 @@ class State:
 
     @property
     def floating(self):
-        fixed_counts = Counter(filter(lambda x: x), self._fixed)
+        fixed_counts = Counter(filter(lambda x: x, self._fixed))
         return {
             token for token, minimum in self._min_counts.items()
             if minimum > fixed_counts[token]
@@ -107,7 +109,7 @@ class State:
 
     @property
     def known(self):
-        return self.floating.union(filter(lambda x: x), self._fixed)
+        return self.floating.union(filter(lambda x: x, self._fixed))
 
     @property
     def free(self):
@@ -284,8 +286,7 @@ class SearchSpace:
         return self
 
     def reset(self):
-        self._playable = list(self._pool)
-        self._candidates = list(self._pool)
+        super().__init__(self._pool)
         self._state.reset()
         return self
 
@@ -313,10 +314,6 @@ class GameEngine(SearchSpace):
 
         return self._guesses[-1]
 
-    @property
-    def solved(self):
-        return len(self._candidates) == 1
-
     def submit_guess(self, guess, feedback_mask):
         if guess in self._guesses:
             raise ValueError(f"duplicate guess: {guess!r}")
@@ -327,7 +324,7 @@ class GameEngine(SearchSpace):
         return self
 
     def reset(self):
-        self._turn = 1
+        self._turn = 0
         self._guesses.clear()
         super().reset()
         return self
@@ -353,6 +350,11 @@ class Simulator(GameEngine):
         return self
 
     def play_game(self):
+        # Stubbed for now, but must reset when done. It might be a good idea
+        # to create next_turn and reset decorators. Alternatively, we could
+        # make context manager that accepts a play_game method, and then
+        # resets state when the submitted method exists and the result is
+        # yielded.
         ...
         self.reset()
 
@@ -361,9 +363,5 @@ class Simulator(GameEngine):
         self._answer = self.choose_answer()
         return self
 
-
-class Solver(GameEngine):
-
-    def __init__(self, words):
-        super().__init__(words)
-
+    def simulate(self, n=3_000):
+        raise NotImplementedError
