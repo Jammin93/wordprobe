@@ -1,10 +1,39 @@
-"""Convert probabilities to binary entropy values."""
-import numpy as np
+"""
+NumPy-backed scoring, rate, and ranking helpers.
 
-from functools import wraps
+This module is the scoring boundary between the word-oriented engine and the
+matrix-oriented heuristic implementation.
+
+Core terminology:
+    candidates:
+        Current possible answers. These are always the basis for rates.
+
+    pool:
+        Words being scored/ranked. If None, pool defaults to candidates.
+
+    scores:
+        NumPy array aligned to pool.
+
+Important invariant:
+    Rates/weights come from candidates.
+    Scores align to pool.
+"""
+import numpy as np
 
 from .constants import ALPHABET_SIZE, TOKEN_OFFSET, WORDSIZE
 from .transforms import tokenize
+
+__all__ = (
+    "token_probability_scores",
+    "token_entropy_scores",
+    "token_index_probability_scores",
+    "token_index_entropy_scores",
+    "composite_probability_scores",
+    "composite_entropy_scores",
+    "rank",
+    "best_candidate",
+    "top_candidates",
+)
 
 
 def _bin_entropy_array(probabilities):
@@ -193,7 +222,7 @@ def _score_tokens(matrix, weights, excluded_tokens=None, *, to_average=False):
         # If we're excluding a token, we need to multiply by zero, so set its
         # weight in the weights table to zero.
         weights[excluded] = 0.0
-        presence[excluded] = False
+        presence[:, excluded] = False
 
     # multiply weights[x, y] by presence[x, y]
     scores = presence @ weights
@@ -260,28 +289,49 @@ def _encode_token_set(tokens):
 
 
 def token_probability_scores(candidates, pool=None, excluded_tokens=None):
+    candidates, pool = _coerce(candidates, pool)
+    return _get_token_probability_scores(candidates, pool, excluded_tokens)
+
+
+def _get_token_probability_scores(candidates, pool=None, excluded_tokens=None):
     """
     Score pool by average global token probability across the list of
     candidates. When no pool is provided, the candidate list becomes the pool.
     """
-    candidates, pool = _coerce(candidates, pool)
     rates = _token_rates(candidates)
     excluded_tokens = _encode_token_set(excluded_tokens)
     return _score_tokens(pool, rates, excluded_tokens, to_average=True)
 
 
 def token_entropy_scores(candidates, pool=None, excluded_tokens=None):
+    candidates, pool = _coerce(candidates, pool)
+    return _get_token_entropy_scores(candidates, pool, excluded_tokens)
+
+
+def _get_token_entropy_scores(candidates, pool=None, excluded_tokens=None):
     """
     Score pool by summed global token entropy. When no pool is provided,
     the candidate list becomes the pool.
     """
-    candidates, pool = _coerce(candidates, pool)
-    rates = _bin_entropy_array(_token_rates(candidates))
+    entropies = _bin_entropy_array(_token_rates(candidates))
     excluded_tokens = _encode_token_set(excluded_tokens)
-    return _score_tokens(pool, rates, excluded_tokens)
+    return _score_tokens(pool, entropies, excluded_tokens)
 
 
 def token_index_probability_scores(
+        candidates,
+        pool=None,
+        excluded_indices=None,
+        ):
+    candidates, pool = _coerce(candidates, pool)
+    return _get_token_index_probability_scores(
+        candidates,
+        pool,
+        excluded_indices,
+    )
+
+
+def _get_token_index_probability_scores(
         candidates,
         pool=None,
         excluded_indices=None,
@@ -290,17 +340,24 @@ def token_index_probability_scores(
     Score pool by average token-index probability. If no pool is provided,
     the pool becomes the candidate list.
     """
-    candidates, pool = _coerce(candidates, pool)
     rates = _token_index_rates(candidates)
     return _score_indices(pool, rates, excluded_indices, to_average=True)
 
 
 def token_index_entropy_scores(candidates, pool=None, excluded_indices=None):
+    candidates, pool = _coerce(candidates, pool)
+    return _get_token_index_entropy_scores(candidates, pool, excluded_indices)
+
+
+def _get_token_index_entropy_scores(
+        candidates,
+        pool=None,
+        excluded_indices=None,
+        ):
     """
     Score pool by summed token-index entropy. If no pool is provided, the pool
     becomes the candidate list.
     """
-    candidates, pool = _coerce(candidates, pool)
     rates = _bin_entropy_array(_token_index_rates(candidates))
     return _score_indices(pool, rates, excluded_indices)
 
@@ -315,8 +372,13 @@ def composite_probability_scores(
     Score pool by combining token probability and token-index probability. If
     no pool is provided, the pool becomes the candidate list.
     """
-    token_scores = token_probability_scores(candidates, pool, excluded_tokens)
-    index_scores = token_index_probability_scores(
+    candidates, pool = _coerce(candidates, pool)
+    token_scores = _get_token_probability_scores(
+        candidates,
+        pool,
+        excluded_tokens,
+    )
+    index_scores = _get_token_index_probability_scores(
         candidates,
         pool,
         excluded_indices,
@@ -334,8 +396,9 @@ def composite_entropy_scores(
     Score pool by combining token entropy and token-index entropy. If no pool
     is provided, the pool becomes the candidate list.
     """
-    token_scores = token_entropy_scores(candidates, pool, excluded_tokens)
-    index_scores = token_index_entropy_scores(
+    candidates, pool = _coerce(candidates, pool)
+    token_scores = _get_token_entropy_scores(candidates, pool, excluded_tokens)
+    index_scores = _get_token_index_entropy_scores(
         candidates,
         pool,
         excluded_indices,
