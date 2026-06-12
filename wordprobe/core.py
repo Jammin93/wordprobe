@@ -1,367 +1,228 @@
+from __future__ import annotations
+
 import string
-import random
 
 import numpy as np
 
-from collections import Counter, defaultdict, deque
+from collections import Counter, defaultdict
+from functools import cached_property
 
-from .constants import WORDSIZE
-from .heuristics import (
-    token_probability_scores,
-    token_entropy_scores,
-    token_index_probability_scores,
-    token_index_entropy_scores,
-    composite_probability_scores,
-    composite_entropy_scores,
-    rank,
-    best_candidate,
-    top_candidates,
+from .abstract import WordList, NGramArray
+from .constants import ALPHABET_SIZE, NULL, TokenFlags, WORDSIZE
+from .transforms import (
+    bin_entropy,
+    compose_token_mask,
+    encode_token_set,
+    encode_tokens,
+    token_presence,
 )
-
-
-def compose_token_mask(guess, answer):
-    mask = ["*"] * WORDSIZE
-    remaining = Counter(answer)
-    for i, token in enumerate(guess):
-        if token == answer[i]:
-            mask[i] = "-"
-            remaining[token] -= 1
-
-    for i, token in enumerate(guess):
-        if mask[i] == "-":
-            continue
-
-        if remaining[token] > 0:
-            mask[i] = "?"
-            remaining[token] -= 1
-
-    return "".join(mask)
-
-
-def validate_word(word):
-    if len(word) != WORDSIZE:
-        raise ValueError(
-            f"guesses must be of length {WORDSIZE}; got {len(word)}"
-        )
-
-    tokens = string.ascii_lowercase
-    if not set(word).issubset(tokens):
-        raise ValueError(
-            f"invalid token in guess '{word}'; valid tokens: {tokens}"
-        )
-
-
-def validate_token_mask(mask):
-    if (size := len(mask)) != WORDSIZE:
-        raise ValueError(
-            f"token masks must be of length {WORDSIZE}; got {size}"
-        )
-
-    if not set(mask).issubset(set("*?-")):
-        raise ValueError(
-            f"invalid token flag in token mask '{mask}';" 
-            f"valid flags: *, ?, -"
-        )
 
 
 class State:
     __slots__ = ("_fixed", "_banned", "_min_counts", "_max_counts")
 
     def __init__(self):
-        self._fixed = [None] * WORDSIZE
-        self._banned = defaultdict(set)
-        self._min_counts = defaultdict(int)
-        self._max_counts = {}
+        self._fixed = np.full(WORDSIZE, NULL, dtype=int)
+        self._banned = np.zeros((ALPHABET_SIZE, WORDSIZE), dtype=bool)
+        self._min_counts = np.zeros(ALPHABET_SIZE, dtype=int)
+        self._max_counts = np.full(ALPHABET_SIZE, WORDSIZE, dtype=int)
 
     @property
     def fixed(self):
-        return list(self._fixed)
-
-    @property
-    def banned(self):
-        return {
-            token: list(indices)
-            for token, indices in self._banned.items()
-        }
-
-    @property
-    def invalid(self):
-        return {
-            token for token, mx in self._max_counts.items()
-            if mx == 0
-        }
-
-    @property
-    def min_counts(self):
-        return dict(self._min_counts)
-
-    @property
-    def max_counts(self):
-        return dict(self._max_counts)
-
-    @property
-    def floating(self):
-        fixed_counts = Counter(filter(lambda x: x, self._fixed))
-        return {
-            token for token, minimum in self._min_counts.items()
-            if minimum > fixed_counts[token]
-        }
-
-    @property
-    def known(self):
-        return self.floating.union(filter(lambda x: x, self._fixed))
+        return self._fixed.copy()
 
     @property
     def free(self):
-        return set(range(WORDSIZE)) - {
-            i for i, token in enumerate(self._fixed)
-            if token is not None
-        }
+        return set(np.flatnonzero(self._fixed == NULL))
 
-    def is_candidate(self, word):
-        return not any((
-            self.has_invalid_tokens(word),
-            not self.satisfies_banned_positions(word),
-            not self.satisfies_fixed_positions(word),
-            not self.satisfies_min_counts(word),
-            not self.satisfies_max_counts(word),
-        ))
-
-    def has_invalid_tokens(self, word):
-        return bool(self.invalid.intersection(word))
-
-    def satisfies_fixed_positions(self, word):
-        for idx, fixed in enumerate(self._fixed):
-            if fixed is not None and word[idx] != fixed:
-                return False
-
-        return True
-
-    def satisfies_banned_positions(self, word):
-        for idx, token in enumerate(word):
-            if idx in self._banned.get(token, ()):
-                return False
-
-        return True
-
-    def satisfies_min_counts(self, word):
-        counts = Counter(word)
-        for token, minimum in self._min_counts.items():
-            if counts[token] < minimum:
-                return False
-
-        return True
-
-    def satisfies_max_counts(self, word):
-        counts = Counter(word)
-        for token, mx in self._max_counts.items():
-            if counts[token] > mx:
-                return False
-
-        return True
+    @property
+    def known(self):
+        return set(np.flatnonzero(self._min_counts > 0))
 
     def update(self, guess, mask):
-        validate_word(guess)
-        validate_token_mask(mask)
+        fixed = np.fromiter(
+            (flag == TokenFlags.FIXED for flag in mask),
+            dtype=bool,
+            count=WORDSIZE,
+        )
+        floating = np.fromiter(
+            (flag == TokenFlags.FLOAT for flag in mask),
+            dtype=bool,
+            count=WORDSIZE,
+        )
+        missed = np.fromiter(
+            (flag == TokenFlags.MISS for flag in mask),
+            dtype=bool,
+            count=WORDSIZE,
+        )
+        present = fixed | floating
 
-        positive_counts = Counter()
-        for i, token in enumerate(guess):
-            flag = mask[i]
-            if flag == "-":
-                self._add_fixed(i, token)
-                positive_counts[token] += 1
-            elif flag == "?":
-                self._ban_position(i, token)
-                positive_counts[token] += 1
-            else:
-                self._ban_position(i, token)
-
-        self._add_count_constraints(guess, positive_counts)
+        self._update_fixed(guess, fixed)
+        self._update_banned(guess, floating, missed)
+        self._update_counts(guess, present, missed)
         return self
 
-    def update_from_answer(self, guess, answer):
-        validate_word(answer)
-        return self.update(guess, compose_token_mask(guess, answer))
+    def match(self, ngrams):
+        ids = np.arange(len(ngrams))
+
+        fixed = self._match_fixed(ngrams)
+        ids = ids[fixed]
+        if len(ids) == 0:
+            return fixed
+
+        banned = self._match_banned(ngrams[ids])
+        ids = ids[banned]
+        if len(ids) == 0:
+            matches = np.zeros(len(ngrams), dtype=bool)
+            return matches
+
+        counts = self._token_counts(ngrams[ids])
+
+        minimum = self._match_min_counts(counts)
+        ids = ids[minimum]
+        if len(ids) == 0:
+            matches = np.zeros(len(ngrams), dtype=bool)
+            return matches
+
+        counts = counts[minimum]
+
+        maximum = self._match_max_counts(counts)
+        ids = ids[maximum]
+
+        matches = np.zeros(len(ngrams), dtype=bool)
+        matches[ids] = True
+        return matches
 
     def reset(self):
-        self.__init__()
+        self._fixed[:] = NULL
+        self._banned[:] = False
+        self._min_counts[:] = 0
+        self._max_counts[:] = WORDSIZE
         return self
 
-    def _add_fixed(self, idx, token):
-        active = self._fixed[idx]
-        if active is not None and active != token:
-            raise ValueError(
-                f"fixed token conflict at index {idx}: {active!r} vs {token!r}"
+    def _match_fixed(self, ngrams):
+        fixed = self._fixed != NULL
+        if not np.any(fixed):
+            return np.ones(len(ngrams), dtype=bool)
+
+        return np.all(ngrams[:, fixed] == self._fixed[fixed], axis=1)
+
+    def _match_banned(self, ngrams):
+        banned = self._banned[ngrams, np.arange(WORDSIZE)]
+        return ~np.any(banned, axis=1)
+
+    def _match_min_counts(self, counts):
+        required = self._min_counts > 0
+        if not np.any(required):
+            return np.ones(len(counts), dtype=bool)
+
+        return np.all(
+            counts[:, required] >= self._min_counts[required],
+            axis=1,
+        )
+
+    def _match_max_counts(self, counts):
+        constrained = self._max_counts < WORDSIZE
+        if not np.any(constrained):
+            return np.ones(len(counts), dtype=bool)
+
+        return np.all(
+            counts[:, constrained] <= self._max_counts[constrained],
+            axis=1,
+        )
+
+    def _token_counts(self, ngrams):
+        counts = np.zeros((len(ngrams), ALPHABET_SIZE), dtype=int)
+        rows = np.arange(len(ngrams))
+        one = 1
+        for i in range(WORDSIZE):
+            np.add.at(
+                counts,
+                (rows, ngrams[:, i]),
+                one,
             )
 
-        if idx in self._banned.get(token, ()):
-            raise ValueError(
-                f"banned token conflict at index {idx}: {token!r}"
+        return counts
+
+    def _update_fixed(self, guess, fixed):
+        self._fixed[fixed] = guess[fixed]
+
+    def _update_banned(self, guess, floating, missed):
+        banned = floating | missed
+
+        for i in np.flatnonzero(banned):
+            self._banned[guess[i], i] = True
+
+    def _update_counts(self, guess, present, missed):
+        for token in np.unique(guess):
+            token_mask = guess == token
+
+            hits = int(np.sum(token_mask & present))
+            misses = int(np.sum(token_mask & missed))
+
+            self._min_counts[token] = max(
+                self._min_counts[token],
+                hits,
             )
 
-        self._fixed[idx] = token
-
-    def _ban_position(self, idx, token):
-        if self._fixed[idx] == token:
-            raise ValueError(f"fixed token conflict at index {idx}: {token!r}")
-
-        self._banned[token].add(idx)
-
-    def _add_count_constraints(self, guess, positive_counts):
-        guess_counts = Counter(guess)
-        for token, count in positive_counts.items():
-            self._min_counts[token] = max(self._min_counts[token], count)
-            self._validate_token_count(token)
-
-        for token, count in guess_counts.items():
-            if (pct := positive_counts[token]) < count:
-                self._set_max_count(token, pct)
-
-    def _set_max_count(self, token, count):
-        if token in self._max_counts:
-            self._max_counts[token] = min(self._max_counts[token], count)
-        else:
-            self._max_counts[token] = count
-
-        self._validate_token_count(token)
-
-    def _validate_token_count(self, token):
-        if (
-                    token in self._max_counts
-                and self._min_counts[token] > self._max_counts[token]
-                ):
-            raise ValueError(
-                f"conflicting count constraints for {token!r}"
-                f"min={self._min_counts[token]}, "
-                f"max={self._max_counts[token]}"
-            )
+            if misses:
+                self._max_counts[token] = min(
+                    self._max_counts[token],
+                    hits,
+                )
 
 
 class SearchSpace:
-    __slots__ = ("_pool", "_playable", "_candidates", "_state")
+    __slots__ = ("_candidates", "_playable", "_state")
 
-    def __init__(self, words):
-        self._pool = tuple(dict.fromkeys(words))
-        self._playable = list(dict.fromkeys(words))
-        self._candidates = list(dict.fromkeys(words))
+    def __init__(self, answers, guesses):
         self._state = State()
-
-    @property
-    def candidates(self):
-        return tuple(self._candidates)
-
-    @property
-    def playable(self):
-        return tuple(self._playable)
-
-    @property
-    def eliminated(self):
-        active = set(self._candidates)
-        return tuple(word for word in self._pool if word not in active)
+        self._playable = WordList(guesses)
+        self._candidates = WordList(answers)
 
     @property
     def state(self):
         return self._state
 
     @property
+    def playable(self):
+        return self._playable
+
+    @property
+    def candidates(self):
+        return self._candidates
+
+    @property
     def empty(self):
         return len(self._candidates) == 0
 
-    def where(self, *predicates):
-        return [
-            word for word in self._candidates
-            if all(predicate(word) for predicate in predicates)
-        ]
-
     def update(self, guess, mask):
-        self.state.update(guess, mask)
-        self._candidates = [
-            word for word in self._candidates
-            if word != guess and self.state.is_candidate(word)
-        ]
-        self._playable = [
-            word for word in self._playable
-            if word != guess
-        ]
+        guess_tokens = encode_tokens(guess)
+
+        self._state.update(guess_tokens, mask)
+        self._eliminate(guess)
+
+        self._candidates.keep(
+            lambda words: self._state.match(words.ngrams())
+        )
         return self
 
     def reset(self):
-        super().__init__(self._pool)
         self._state.reset()
+        self._playable.reset()
+        self._candidates.reset()
         return self
 
+    def _eliminate(self, guess):
+        self._candidates.discard(guess)
+        self._playable.discard(guess)
 
-class GameEngine(SearchSpace):
-    __slots__ = ("_guesses", "_turn")
+    def __len__(self):
+        return len(self._candidates)
 
-    def __init__(self, words):
-        super().__init__(words)
-        self._guesses = []
-        self._turn = 1
-
-    @property
-    def guesses(self):
-        return tuple(self._guesses)
-
-    @property
-    def turn(self):
-        return self._turn
-
-    @property
-    def last_guess(self):
-        if len(self._guesses) == 0:
-            raise RuntimeError("no guesses submitted")
-
-        return self._guesses[-1]
-
-    def submit_guess(self, guess, feedback_mask):
-        if guess in self._guesses:
-            raise ValueError(f"duplicate guess: {guess!r}")
-
-        self.update(guess, feedback_mask)
-        self._guesses.append(guess)
-        self._turn += 1
-        return self
-
-    def reset(self):
-        self._turn = 0
-        self._guesses.clear()
-        super().reset()
-        return self
-
-
-class Simulator(GameEngine):
-    __slots__ = ("_answer", )
-
-    def __init__(self, words):
-        super().__init__(words)
-        self._answer = self.choose_answer()
-
-    @property
-    def answer(self):
-        return self._answer
-
-    def choose_answer(self):
-        return random.choice(self._pool)
-
-    def submit_guess(self, guess):
-        mask = compose_token_mask(guess, self._answer)
-        super().submit_guess(guess, mask)
-        return self
-
-    def play_game(self):
-        # Stubbed for now, but must reset when done. It might be a good idea
-        # to create next_turn and reset decorators. Alternatively, we could
-        # make context manager that accepts a play_game method, and then
-        # resets state when the submitted method exists and the result is
-        # yielded.
-        ...
-        self.reset()
-
-    def reset(self):
-        super().reset()
-        self._answer = self.choose_answer()
-        return self
-
-    def simulate(self, n=3_000):
-        raise NotImplementedError
+    def __repr__(self):
+        return (
+            f"{type(self).__name__}("
+            f"candidates={len(self._candidates)}, "
+            f"playable={len(self._playable)})"
+        )

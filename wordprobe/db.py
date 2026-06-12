@@ -1,13 +1,14 @@
 """Local dataset loading and historical Wordle API synchronization helpers."""
-
 import pathlib
 import time
 
+import numpy as np
 import pandas as pd
 
 from datetime import datetime, timedelta
 from typing import Any
 
+from .transforms import compose_token_mask, encode_mask
 from .utils import debrine, to_iso_date
 
 __all__ = ("get_answers", "get_past_games")
@@ -61,7 +62,7 @@ def get_games_since(date: datetime) -> list[dict[str, Any]]:
     cache_dir = cwd / "data" / "http"
     cache_dir.mkdir(parents=True, exist_ok=True)
     session = CachedLimiterSession(
-        cache_name=cache_dic / "cache",
+        cache_name=cache_dir / "cache",
         urls_expire_after={API_URL + "/*": timedelta(days=1)},
         allowable_methods=["GET"],
         allowable_codes=[200],
@@ -109,3 +110,24 @@ def update(db: pd.DataFrame) -> pd.DataFrame:
         pathlib.Path(CWD).parent / "data" / "db" / "past_games.pkl"
     )
     return updated
+
+
+def build_feedback_table(words):
+    table = np.empty((n := len(words), n), dtype=np.uint8)
+    for term_id, term in enumerate(words):
+        for answer_id, answer in enumerate(words):
+            mask = compose_token_mask(term, answer)
+            table[term_id, answer_id] = encode_mask(mask)
+
+    return table
+
+
+def load_feedback_cache(words):
+    cwd = pathlib.Path(__file__).parent.resolve()
+    cache_path = cwd.parent / "data" / "db" / "feedback_cache.npy"
+    if not cache_path.exists():
+        cache = build_feedback_table(words)
+        np.save(cache_path, cache)
+        return cache
+
+    return np.load(cache_path)
