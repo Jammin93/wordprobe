@@ -348,13 +348,12 @@ class AbstractStrategy(ABC):
     def opener(self) -> str:
         return self.select_opener()
 
-    @abstractmethod
     def select_opener(self) -> str:
-        ...
+        return None
 
     @abstractmethod
     def next_guess(self, turn: int) -> str:
-        ...
+        raise NotImplementedError
 
 
 class GameEngine:
