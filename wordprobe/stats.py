@@ -1,5 +1,4 @@
-from dataclasses import asdict, dataclass, field
-from time import perf_counter_ns
+from dataclasses import asdict, dataclass
 from typing import Any
 
 
@@ -14,7 +13,7 @@ class GameStats:
 
     @property
     def lost(self) -> bool:
-        return not self.won
+        return not self.solved
 
     @property
     def elapsed(self) -> bool:
