@@ -1,6 +1,7 @@
 import numpy as np
 
 from collections import Counter
+from functools import cache
 
 from .constants import ALPHABET_SIZE, TokenFlags, TOKEN_OFFSET, WORDSIZE
 
@@ -42,6 +43,7 @@ def encode_token_set(tokens):
     return {ord(token) - TOKEN_OFFSET for token in tokens}
 
 
+@cache
 def compose_token_mask(guess, answer):
     mask = [TokenFlags.MISS] * WORDSIZE
     remaining = Counter(answer)

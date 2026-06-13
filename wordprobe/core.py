@@ -7,8 +7,9 @@ import numpy as np
 from collections import Counter, defaultdict
 from functools import cached_property
 
-from .abstract import WordList, NGramArray
+from .abstract import AbstractStrategy, GameEngine, NGramArray, WordList
 from .constants import ALPHABET_SIZE, NULL, TokenFlags, WORDSIZE
+from .stats import GameStats, SimulatorStats
 from .transforms import (
     bin_entropy,
     compose_token_mask,
@@ -226,3 +227,96 @@ class SearchSpace:
             f"candidates={len(self._candidates)}, "
             f"playable={len(self._playable)})"
         )
+
+
+class Simulator(GameEngine):
+    __slots__ = (
+        "_answers",
+        "_max_turns",
+        "_guesses",
+        "_masks",
+    )
+
+    def __init__(
+            self,
+            answers,
+            guesses,
+            strategy,
+            *,
+            max_turns: int = float("inf"),
+            ):
+        super().__init__(answers, guesses, strategy)
+
+        self._answers = answers
+        self._max_turns = max_turns
+
+        self._min_turns
+        self._mas_turns
+
+    def play_game(self, answer) -> GameStats:
+        from time import perf_counter_ns
+
+        guesses = []
+        masks = []
+
+        start = perf_counter_ns()
+        solved = False
+        while self.turn < self._max_turns and not solved:
+            guess = self.next_guess()
+            mask = compose_token_mask(guess, answer)
+
+            guesses.append(guess)
+            masks.append(mask)
+            
+            self.submit(guess, mask)
+            if guess == answer:
+                solved = True
+        
+        elapsed = perf_counter_ns() - start
+        return GameStats(
+            answer=answer,
+            guesses=tuple(guesses),
+            masks=tuple(masks),
+            solved=solved,
+            turns=self.turn - 1,
+            elapsed_ns=elapsed,
+        )
+
+    def simulate(self):
+        from time import perf_counter
+
+        n_games = len(self._answers)
+        
+        wins = 0
+        i = 0
+
+        start = perf_counter()
+        while i < n_games:
+            answer = self._answers[i]
+            stats = self.play_game(answer)
+            
+            if stats.turns < self._min_turns:
+                self._min_turns = stats.turns
+
+            if stats.turns > self._max_turns:
+                self._max_turns = stats.turns
+
+            if stats.solved:
+                wins += 1
+            else:
+                losses
+        
+        return SimulatorStats(
+            games=n_games,
+            wins=wins,
+            losses=n_games - wins,
+            average_turns
+        )
+
+
+
+
+
+
+
+
